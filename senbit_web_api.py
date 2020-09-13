@@ -9,43 +9,7 @@ from pprint import pprint as pp
 import logging
 from logging import exception, handlers
 
-
-class Logger(object):
-    level_relations = {
-        'debug':logging.DEBUG,
-        'info':logging.INFO,
-        'warning':logging.WARNING,
-        'error':logging.ERROR,
-        'crit':logging.CRITICAL
-    }#日志级别关系映射
-
-    def __init__(self,filename,level='info',when='D',backCount=3,fmt='%(asctime)s - %(pathname)s[line:%(lineno)d] - %(levelname)s: %(message)s'):
-        self.logger = logging.getLogger(filename)
-        format_str = logging.Formatter(fmt)#设置日志格式
-        self.logger.setLevel(self.level_relations.get(level))#设置日志级别
-        sh = logging.StreamHandler()#往屏幕上输出
-        sh.setFormatter(format_str) #设置屏幕上显示的格式
-        th = handlers.TimedRotatingFileHandler(filename=filename,when=when,backupCount=backCount,encoding='utf-8')#往文件里写入#指定间隔时间自动生成文件的处理器
-        #实例化TimedRotatingFileHandler
-        #interval是时间间隔，backupCount是备份文件的个数，如果超过这个个数，就会自动删除，when是间隔的时间单位，单位有以下几种：
-        # S 秒
-        # M 分
-        # H 小时、
-        # D 天、
-        # W 每星期（interval==0时代表星期一）
-        # midnight 每天凌晨
-        th.setFormatter(format_str)#设置文件里写入的格式
-        self.logger.addHandler(sh) #把对象加到logger里
-        self.logger.addHandler(th)
-
 class Exchange_web_api(object):
-    level_relations = {
-        'debug':logging.DEBUG,
-        'info':logging.INFO,
-        'warning':logging.WARNING,
-        'error':logging.ERROR,
-        'crit':logging.CRITICAL
-    }#日志级别关系映射
 
     def __init__(self,site,key_common_access,key_common_secret,key_trade_access,key_trade_secret):
         #web-api的网址和KEY
@@ -62,7 +26,7 @@ class Exchange_web_api(object):
         #这个web-api的delete请求数量
         self.__delete_count = 0
 
-        #本地与服务器时间差
+        #本地与服务器时间差,用于矫正时间戳
         self.__timestamp_gap = 0
 
         self.__HEADERS = {'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_14_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/71.0.3578.98 Safari/537.36'}
@@ -72,16 +36,36 @@ class Exchange_web_api(object):
         self.__timestamp_gap = gap
         return
     
-    #获取时间戳
+    #获取与服务器相等的、可用的时间戳
     def get_time_str(self):
         return str(int(time.time()*1000 + self.__timestamp_gap ))
 
     def get_quote(self,_):
         return quote_plus(_)
 
+    
+    #通用的签名函数，签名需要按照字母顺序排列
+    def get_sign_params(self,p_params,p_key):
+        sorted_key_list = sorted(p_params)
+        #print(sorted_key_list)
+    
+        sign_query = ''
+        for v in sorted_key_list:
+            if(p_params[v] is not None):
+                if(sign_query == ''):
+                    sign_query = ''.join([v,'=',str(p_params[v])])
+                else:
+                    sign_query = ''.join([sign_query,'&',v,'=',str(p_params[v])])
+        
+        print(sign_query)
+        sign_result = hmac.new(bytes(p_key, 'utf-8'), bytes(sign_query, 'utf-8'), digestmod=hashlib.sha256).hexdigest()
+
+        return sign_result
+
     #通用的签名函数，签名需要按照字母顺序排列
     def get_sign(self,time_str, path, method, market):
         sign_query = '_=%s&access=%s&method=%s&path=%s&symbol=%s'%(time_str, self.__key_common_access, method, self.get_quote(path), self.get_quote(market))
+        print(sign_query)
         sign_result = hmac.new(bytes(self.__key_common_secret, 'utf-8'), bytes(sign_query, 'utf-8'), digestmod=hashlib.sha256).hexdigest()
 
         return sign_result
@@ -114,6 +98,7 @@ class Exchange_web_api(object):
         method = 'GET'
         path = '/api/x/v1/order/order'
         url = '%s%s'%(self.__site, path)
+
         sign = self.get_sign_read_order(time_str,path, method,p_page,{'state': p_state,'symbol': p_symbol,'type': p_type } )
         params = {
             '_': time_str,
@@ -148,7 +133,8 @@ class Exchange_web_api(object):
         }
         return ret
 
-    #获取报价
+    
+    #获取报价API
     def call_api_tickers(self,market):
         time_str = self.get_time_str()
 
@@ -156,7 +142,15 @@ class Exchange_web_api(object):
         path = '/api/x/v1/market/tickers'
         url = '%s%s'%(self.__site, path)
 
-        sign = self.get_sign(time_str, path, method, market)
+        sign_params = {
+            '_': time_str,
+            'access': self.__key_common_access,
+            'symbol': self.get_quote(market),
+            'method': method,
+            'path': self.get_quote(path)
+        }
+
+        sign = self.get_sign_params(sign_params,self.__key_common_secret)
         params = {
             '_': time_str,
             'access': self.__key_common_access,
@@ -245,6 +239,64 @@ class Exchange_web_api(object):
         return ret
 
 
+
+
+    
+        
+
+    #获取kline
+    def call_api_get_market_kline(self,p_symbol,p_period,p_from=None,p_direction=None,p_max=None):
+        
+        time_str = self.get_time_str()
+
+        method = 'GET'
+        path = '/api/x/v1/market/kline'
+        url = '%s%s'%(self.__site, path)
+
+        sign_params = {
+            '_': time_str,
+            'access': self.__key_common_access,
+            'symbol': self.get_quote(p_symbol),
+            'period': p_period,
+            'from':p_from,
+            'direction':p_direction,
+            'max':p_max,
+            'method':method,
+            'path':self.get_quote(path)
+        }
+        sign = self.get_sign_params(sign_params,self.__key_common_secret)
+
+        request_params = {
+            '_': time_str,
+            'access': self.__key_common_access,
+            'sign':sign,
+            'symbol': p_symbol,
+            'period': p_period,
+        }
+        if(p_from is not None):
+            request_params['from'] = p_from
+        if(p_direction is not None):
+            request_params['direction'] = p_direction
+        if(p_max is not None):
+            request_params['max'] = p_max
+
+        try:
+            _ = requests.get(url, params=request_params, headers=self.__HEADERS)
+            print(_.url)
+            ret = {
+            "status_code": _.status_code,
+            "json": _.json()
+            }
+
+        except:
+            ret = {
+            "status_code": "701",
+            "json": ""
+            }
+
+        return ret
+
+
     #获取市场深度的API
     def call_api_get_market_depth(self,market):
         time_str = self.get_time_str()
@@ -318,8 +370,6 @@ class Exchange_web_api(object):
 #用于 class test
 def main_run():
     
-    log = Logger('all.log',level='debug')
-    
     #从本地数据库中读取api-key，也可以直接输入-start
     from senbit import senbit_db_api
  
@@ -342,8 +392,7 @@ def main_run():
     print('-----test start--------')
 
     ret = swao.call_api_timestamp()
-    log.logger.info(ret)
-    now_stamp = time.time()
+
     status_code = ret.get('status_code')
     if status_code == 200:
         senbittimestamp = ret.get('json', {}).get('unix')
@@ -351,6 +400,17 @@ def main_run():
     else:
         swao.setTimestampGap(0)
 
+    ret = swao.call_api_tickers('CNYS/USDT')
+    print(ret)
+    
+    ret = swao.call_api_tickers('CNYS/USDT')
+    print(ret)
+
+    ret = swao.call_api_get_market_kline('CNYS/USDT',p_period = 60,p_from=int(time.time()*1000),p_max=20)
+    print(ret)
+    time.sleep(100)
+
+    '''
     #log.logger.info(ret)
     ret = swao.call_api_tickers('CNYS/USDT')
     log.logger.info(ret)
@@ -374,7 +434,7 @@ def main_run():
         time.sleep( 200 )
         y = y+1
         print("第{}次".format(y))
-        
+    '''
 
 if __name__ == "__main__":
     main_run()
